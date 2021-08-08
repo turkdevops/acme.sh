@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 
-VER=3.0.0
+VER=3.0.1
 
 PROJECT_NAME="acme.sh"
 
@@ -1768,7 +1768,7 @@ _inithttp() {
     if [ -z "$ACME_HTTP_NO_REDIRECTS" ]; then
       _ACME_CURL="$_ACME_CURL -L "
     fi
-    if [ "$DEBUG" ] && [ "$DEBUG" -ge "2" ]; then
+    if [ "$DEBUG" ] && [ "$DEBUG" -ge 2 ]; then
       _CURL_DUMP="$(_mktemp)"
       _ACME_CURL="$_ACME_CURL --trace-ascii $_CURL_DUMP "
     fi
@@ -1808,6 +1808,8 @@ _inithttp() {
 
 }
 
+_HTTP_MAX_RETRY=8
+
 # body  url [needbase64] [POST|PUT|DELETE] [ContentType]
 _post() {
   body="$1"
@@ -1815,6 +1817,33 @@ _post() {
   needbase64="$3"
   httpmethod="$4"
   _postContentType="$5"
+  _sleep_retry_sec=1
+  _http_retry_times=0
+  _hcode=0
+  while [ "${_http_retry_times}" -le "$_HTTP_MAX_RETRY" ]; do
+    [ "$_http_retry_times" = "$_HTTP_MAX_RETRY" ]
+    _lastHCode="$?"
+    _debug "Retrying post"
+    _post_impl "$body" "$_post_url" "$needbase64" "$httpmethod" "$_postContentType" "$_lastHCode"
+    _hcode="$?"
+    _debug _hcode "$_hcode"
+    if [ "$_hcode" = "0" ]; then
+      break
+    fi
+    _http_retry_times=$(_math $_http_retry_times + 1)
+    _sleep $_sleep_retry_sec
+  done
+  return $_hcode
+}
+
+# body  url [needbase64] [POST|PUT|DELETE] [ContentType] [displayError]
+_post_impl() {
+  body="$1"
+  _post_url="$2"
+  needbase64="$3"
+  httpmethod="$4"
+  _postContentType="$5"
+  displayError="$6"
 
   if [ -z "$httpmethod" ]; then
     httpmethod="POST"
@@ -1866,7 +1895,9 @@ _post() {
     fi
     _ret="$?"
     if [ "$_ret" != "0" ]; then
-      _err "Please refer to https://curl.haxx.se/libcurl/c/libcurl-errors.html for error code: $_ret"
+      if [ -z "$displayError" ] || [ "$displayError" = "0" ]; then
+        _err "Please refer to https://curl.haxx.se/libcurl/c/libcurl-errors.html for error code: $_ret"
+      fi
       if [ "$DEBUG" ] && [ "$DEBUG" -ge "2" ]; then
         _err "Here is the curl dump log:"
         _err "$(cat "$_CURL_DUMP")"
@@ -1922,7 +1953,9 @@ _post() {
       _debug "wget returns 8, the server returns a 'Bad request' response, lets process the response later."
     fi
     if [ "$_ret" != "0" ]; then
-      _err "Please refer to https://www.gnu.org/software/wget/manual/html_node/Exit-Status.html for error code: $_ret"
+      if [ -z "$displayError" ] || [ "$displayError" = "0" ]; then
+        _err "Please refer to https://www.gnu.org/software/wget/manual/html_node/Exit-Status.html for error code: $_ret"
+      fi
     fi
     _sed_i "s/^ *//g" "$HTTP_HEADER"
   else
@@ -1936,13 +1969,38 @@ _post() {
 
 # url getheader timeout
 _get() {
+  url="$1"
+  onlyheader="$2"
+  t="$3"
+  _sleep_retry_sec=1
+  _http_retry_times=0
+  _hcode=0
+  while [ "${_http_retry_times}" -le "$_HTTP_MAX_RETRY" ]; do
+    [ "$_http_retry_times" = "$_HTTP_MAX_RETRY" ]
+    _lastHCode="$?"
+    _debug "Retrying GET"
+    _get_impl "$url" "$onlyheader" "$t" "$_lastHCode"
+    _hcode="$?"
+    _debug _hcode "$_hcode"
+    if [ "$_hcode" = "0" ]; then
+      break
+    fi
+    _http_retry_times=$(_math $_http_retry_times + 1)
+    _sleep $_sleep_retry_sec
+  done
+  return $_hcode
+}
+
+# url getheader timeout displayError
+_get_impl() {
   _debug GET
   url="$1"
   onlyheader="$2"
   t="$3"
+  displayError="$4"
   _debug url "$url"
   _debug "timeout=$t"
-
+  _debug "displayError" "$displayError"
   _inithttp
 
   if [ "$_ACME_CURL" ] && [ "${ACME_USE_WGET:-0}" = "0" ]; then
@@ -1961,7 +2019,9 @@ _get() {
     fi
     ret=$?
     if [ "$ret" != "0" ]; then
-      _err "Please refer to https://curl.haxx.se/libcurl/c/libcurl-errors.html for error code: $ret"
+      if [ -z "$displayError" ] || [ "$displayError" = "0" ]; then
+        _err "Please refer to https://curl.haxx.se/libcurl/c/libcurl-errors.html for error code: $ret"
+      fi
       if [ "$DEBUG" ] && [ "$DEBUG" -ge "2" ]; then
         _err "Here is the curl dump log:"
         _err "$(cat "$_CURL_DUMP")"
@@ -1987,7 +2047,9 @@ _get() {
       _debug "wget returns 8, the server returns a 'Bad request' response, lets process the response later."
     fi
     if [ "$ret" != "0" ]; then
-      _err "Please refer to https://www.gnu.org/software/wget/manual/html_node/Exit-Status.html for error code: $ret"
+      if [ -z "$displayError" ] || [ "$displayError" = "0" ]; then
+        _err "Please refer to https://www.gnu.org/software/wget/manual/html_node/Exit-Status.html for error code: $ret"
+      fi
     fi
   else
     ret=$?
@@ -3099,14 +3161,14 @@ _checkConf() {
       FOUND_REAL_NGINX_CONF="$2"
       return 0
     fi
-    if cat "$2" | tr "\t" " " | grep "^ *include *.*;" >/dev/null; then
+    if cat "$2" | tr "\t" " " | grep "^ *include +.*;" >/dev/null; then
       _debug "Try include files"
-      for included in $(cat "$2" | tr "\t" " " | grep "^ *include *.*;" | sed "s/include //" | tr -d " ;"); do
+      for included in $(cat "$2" | tr "\t" " " | grep "^ *include +.*;" | sed "s/include //" | tr -d " ;"); do
         _debug "check included $included"
         if ! _startswith "$included" "/" && _exists dirname; then
           _relpath="$(dirname "$_c_file")"
           _debug "_relpath" "$_relpath"
-          included="$_relpath/included"
+          included="$_relpath/$included"
         fi
         if _checkConf "$1" "$included"; then
           return 0
@@ -3379,7 +3441,7 @@ _on_before_issue() {
       _netprc="$(_ss "$_checkport" | grep "$_checkport")"
       netprc="$(echo "$_netprc" | grep "$_checkaddr")"
       if [ -z "$netprc" ]; then
-        netprc="$(echo "$_netprc" | grep "$LOCAL_ANY_ADDRESS")"
+        netprc="$(echo "$_netprc" | grep "$LOCAL_ANY_ADDRESS:$_checkport")"
       fi
       if [ "$netprc" ]; then
         _err "$netprc"
@@ -3925,7 +3987,7 @@ _ns_lookup_ali() {
 }
 
 _ns_is_available_dp() {
-  if _get "https://dns.alidns.com" "" 1 >/dev/null 2>&1; then
+  if _get "https://doh.pub" "" 1 >/dev/null 2>&1; then
     return 0
   else
     return 1
@@ -4145,6 +4207,10 @@ issue() {
   if [ -z "$_ACME_IS_RENEW" ]; then
     _initpath "$_main_domain" "$_key_length"
     mkdir -p "$DOMAIN_PATH"
+  elif ! _hasfield "$_web_roots" "$W_DNS"; then
+    Le_OrderFinalize=""
+    Le_LinkOrder=""
+    Le_LinkCert=""
   fi
 
   if _hasfield "$_web_roots" "$W_DNS" && [ -z "$FORCE_DNS_MANUAL" ]; then
@@ -4712,26 +4778,13 @@ $_authorizations_map"
         return 1
       fi
 
-      _debug "sleep 2 secs to verify"
-      sleep 2
-      _debug "checking"
-
-      _send_signed_request "$uri"
-
-      if [ "$?" != "0" ]; then
-        _err "$d:Verify error:$response"
-        _clearupwebbroot "$_currentRoot" "$removelevel" "$token"
-        _clearup
-        _on_issue_err "$_post_hook" "$vlist"
-        return 1
-      fi
       _debug2 original "$response"
 
       response="$(echo "$response" | _normalizeJson)"
       _debug2 response "$response"
 
       status=$(echo "$response" | _egrep_o '"status":"[^"]*' | cut -d : -f 2 | tr -d '"')
-
+      _debug2 status "$status"
       if _contains "$status" "invalid"; then
         error="$(echo "$response" | _egrep_o '"error":\{[^\}]*')"
         _debug2 error "$error"
@@ -4763,9 +4816,9 @@ $_authorizations_map"
       fi
 
       if [ "$status" = "pending" ]; then
-        _info "Pending"
+        _info "Pending, The CA is processing your order, please just wait. ($waittimes/$MAX_RETRY_TIMES)"
       elif [ "$status" = "processing" ]; then
-        _info "Processing"
+        _info "Processing, The CA is processing your order, please just wait. ($waittimes/$MAX_RETRY_TIMES)"
       else
         _err "$d:Verify error:$response"
         _clearupwebbroot "$_currentRoot" "$removelevel" "$token"
@@ -4773,7 +4826,19 @@ $_authorizations_map"
         _on_issue_err "$_post_hook" "$vlist"
         return 1
       fi
+      _debug "sleep 2 secs to verify again"
+      sleep 2
+      _debug "checking"
 
+      _send_signed_request "$uri"
+
+      if [ "$?" != "0" ]; then
+        _err "$d:Verify error:$response"
+        _clearupwebbroot "$_currentRoot" "$removelevel" "$token"
+        _clearup
+        _on_issue_err "$_post_hook" "$vlist"
+        return 1
+      fi
     done
 
   done
@@ -4919,10 +4984,10 @@ $_authorizations_map"
     _info "$(__green "Cert success.")"
     cat "$CERT_PATH"
 
-    _info "Your cert is in $(__green " $CERT_PATH ")"
+    _info "Your cert is in: $(__green "$CERT_PATH")"
 
     if [ -f "$CERT_KEY_PATH" ]; then
-      _info "Your cert key is in $(__green " $CERT_KEY_PATH ")"
+      _info "Your cert key is in: $(__green "$CERT_KEY_PATH")"
     fi
 
     if [ ! "$USER_PATH" ] || [ ! "$_ACME_IN_CRON" ]; then
@@ -4931,8 +4996,8 @@ $_authorizations_map"
     fi
   fi
 
-  [ -f "$CA_CERT_PATH" ] && _info "The intermediate CA cert is in $(__green " $CA_CERT_PATH ")"
-  [ -f "$CERT_FULLCHAIN_PATH" ] && _info "And the full chain certs is there: $(__green " $CERT_FULLCHAIN_PATH ")"
+  [ -f "$CA_CERT_PATH" ] && _info "The intermediate CA cert is in: $(__green "$CA_CERT_PATH")"
+  [ -f "$CERT_FULLCHAIN_PATH" ] && _info "And the full chain certs is there: $(__green "$CERT_FULLCHAIN_PATH")"
 
   Le_CertCreateTime=$(_time)
   _savedomainconf "Le_CertCreateTime" "$Le_CertCreateTime"
@@ -5043,6 +5108,11 @@ renew() {
 
   . "$DOMAIN_CONF"
   _debug Le_API "$Le_API"
+  if [ -z "$Le_API" ]; then
+    #if this is from an old version, Le_API is empty,
+    #so, we force to use letsencrypt server
+    Le_API="$CA_LETSENCRYPT_V2"
+  fi
 
   if [ "$Le_API" ]; then
     if [ "$Le_API" != "$ACME_DIRECTORY" ]; then
@@ -5471,7 +5541,7 @@ _installcert() {
   mkdir -p "$_backup_path"
 
   if [ "$_real_cert" ]; then
-    _info "Installing cert to:$_real_cert"
+    _info "Installing cert to: $_real_cert"
     if [ -f "$_real_cert" ] && [ ! "$_ACME_IS_RENEW" ]; then
       cp "$_real_cert" "$_backup_path/cert.bak"
     fi
@@ -5479,7 +5549,7 @@ _installcert() {
   fi
 
   if [ "$_real_ca" ]; then
-    _info "Installing CA to:$_real_ca"
+    _info "Installing CA to: $_real_ca"
     if [ "$_real_ca" = "$_real_cert" ]; then
       echo "" >>"$_real_ca"
       cat "$CA_CERT_PATH" >>"$_real_ca" || return 1
@@ -5492,7 +5562,7 @@ _installcert() {
   fi
 
   if [ "$_real_key" ]; then
-    _info "Installing key to:$_real_key"
+    _info "Installing key to: $_real_key"
     if [ -f "$_real_key" ] && [ ! "$_ACME_IS_RENEW" ]; then
       cp "$_real_key" "$_backup_path/key.bak"
     fi
@@ -5505,7 +5575,7 @@ _installcert() {
   fi
 
   if [ "$_real_fullchain" ]; then
-    _info "Installing full chain to:$_real_fullchain"
+    _info "Installing full chain to: $_real_fullchain"
     if [ -f "$_real_fullchain" ] && [ ! "$_ACME_IS_RENEW" ]; then
       cp "$_real_fullchain" "$_backup_path/fullchain.bak"
     fi
