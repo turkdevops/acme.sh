@@ -2,7 +2,7 @@
 
 # HUAWEICLOUD_Username
 # HUAWEICLOUD_Password
-# HUAWEICLOUD_ProjectID
+# HUAWEICLOUD_DomainName
 
 iam_api="https://iam.myhuaweicloud.com"
 dns_api="https://dns.ap-southeast-1.myhuaweicloud.com" # Should work
@@ -14,6 +14,8 @@ dns_api="https://dns.ap-southeast-1.myhuaweicloud.com" # Should work
 #
 # Ref: https://support.huaweicloud.com/intl/zh-cn/api-dns/zh-cn_topic_0132421999.html
 #
+# About "DomainName" parameters see: https://support.huaweicloud.com/api-iam/iam_01_0006.html
+#
 
 dns_huaweicloud_add() {
   fulldomain=$1
@@ -21,21 +23,21 @@ dns_huaweicloud_add() {
 
   HUAWEICLOUD_Username="${HUAWEICLOUD_Username:-$(_readaccountconf_mutable HUAWEICLOUD_Username)}"
   HUAWEICLOUD_Password="${HUAWEICLOUD_Password:-$(_readaccountconf_mutable HUAWEICLOUD_Password)}"
-  HUAWEICLOUD_ProjectID="${HUAWEICLOUD_ProjectID:-$(_readaccountconf_mutable HUAWEICLOUD_ProjectID)}"
+  HUAWEICLOUD_DomainName="${HUAWEICLOUD_DomainName:-$(_readaccountconf_mutable HUAWEICLOUD_Username)}"
 
   # Check information
-  if [ -z "${HUAWEICLOUD_Username}" ] || [ -z "${HUAWEICLOUD_Password}" ] || [ -z "${HUAWEICLOUD_ProjectID}" ]; then
+  if [ -z "${HUAWEICLOUD_Username}" ] || [ -z "${HUAWEICLOUD_Password}" ] || [ -z "${HUAWEICLOUD_DomainName}" ]; then
     _err "Not enough information provided to dns_huaweicloud!"
     return 1
   fi
 
   unset token # Clear token
-  token="$(_get_token "${HUAWEICLOUD_Username}" "${HUAWEICLOUD_Password}" "${HUAWEICLOUD_ProjectID}")"
+  token="$(_get_token "${HUAWEICLOUD_Username}" "${HUAWEICLOUD_Password}" "${HUAWEICLOUD_DomainName}")"
   if [ -z "${token}" ]; then # Check token
     _err "dns_api(dns_huaweicloud): Error getting token."
     return 1
   fi
-  _debug "Access token is: ${token}"
+  _secure_debug "Access token is:" "${token}"
 
   unset zoneid
   zoneid="$(_get_zoneid "${token}" "${fulldomain}")"
@@ -43,7 +45,7 @@ dns_huaweicloud_add() {
     _err "dns_api(dns_huaweicloud): Error getting zone id."
     return 1
   fi
-  _debug "Zone ID is: ${zoneid}"
+  _debug "Zone ID is:" "${zoneid}"
 
   _debug "Adding Record"
   _add_record "${token}" "${fulldomain}" "${txtvalue}"
@@ -56,7 +58,7 @@ dns_huaweicloud_add() {
   # Do saving work if all succeeded
   _saveaccountconf_mutable HUAWEICLOUD_Username "${HUAWEICLOUD_Username}"
   _saveaccountconf_mutable HUAWEICLOUD_Password "${HUAWEICLOUD_Password}"
-  _saveaccountconf_mutable HUAWEICLOUD_ProjectID "${HUAWEICLOUD_ProjectID}"
+  _saveaccountconf_mutable HUAWEICLOUD_DomainName "${HUAWEICLOUD_DomainName}"
   return 0
 }
 
@@ -72,21 +74,21 @@ dns_huaweicloud_rm() {
 
   HUAWEICLOUD_Username="${HUAWEICLOUD_Username:-$(_readaccountconf_mutable HUAWEICLOUD_Username)}"
   HUAWEICLOUD_Password="${HUAWEICLOUD_Password:-$(_readaccountconf_mutable HUAWEICLOUD_Password)}"
-  HUAWEICLOUD_ProjectID="${HUAWEICLOUD_ProjectID:-$(_readaccountconf_mutable HUAWEICLOUD_ProjectID)}"
+  HUAWEICLOUD_DomainName="${HUAWEICLOUD_DomainName:-$(_readaccountconf_mutable HUAWEICLOUD_Username)}"
 
   # Check information
-  if [ -z "${HUAWEICLOUD_Username}" ] || [ -z "${HUAWEICLOUD_Password}" ] || [ -z "${HUAWEICLOUD_ProjectID}" ]; then
+  if [ -z "${HUAWEICLOUD_Username}" ] || [ -z "${HUAWEICLOUD_Password}" ] || [ -z "${HUAWEICLOUD_DomainName}" ]; then
     _err "Not enough information provided to dns_huaweicloud!"
     return 1
   fi
 
   unset token # Clear token
-  token="$(_get_token "${HUAWEICLOUD_Username}" "${HUAWEICLOUD_Password}" "${HUAWEICLOUD_ProjectID}")"
+  token="$(_get_token "${HUAWEICLOUD_Username}" "${HUAWEICLOUD_Password}" "${HUAWEICLOUD_DomainName}")"
   if [ -z "${token}" ]; then # Check token
     _err "dns_api(dns_huaweicloud): Error getting token."
     return 1
   fi
-  _debug "Access token is: ${token}"
+  _secure_debug "Access token is:" "${token}"
 
   unset zoneid
   zoneid="$(_get_zoneid "${token}" "${fulldomain}")"
@@ -94,7 +96,7 @@ dns_huaweicloud_rm() {
     _err "dns_api(dns_huaweicloud): Error getting zone id."
     return 1
   fi
-  _debug "Zone ID is: ${zoneid}"
+  _debug "Zone ID is:" "${zoneid}"
 
   # Remove all records
   # Therotically HuaweiCloud does not allow more than one record set
@@ -129,14 +131,28 @@ _get_zoneid() {
     fi
     _debug "$h"
     response=$(_get "${dns_api}/v2/zones?name=${h}")
-
-    if _contains "${response}" "id"; then
-      _debug "Get Zone ID Success."
-      _zoneid=$(echo "${response}" | _egrep_o "\"id\": *\"[^\"]*\"" | cut -d : -f 2 | tr -d \" | tr -d " ")
-      printf "%s" "${_zoneid}"
-      return 0
+    _debug2 "$response"
+    if _contains "${response}" '"id"'; then
+      zoneidlist=$(echo "${response}" | _egrep_o "\"id\": *\"[^\"]*\"" | cut -d : -f 2 | tr -d \" | tr -d " ")
+      zonenamelist=$(echo "${response}" | _egrep_o "\"name\": *\"[^\"]*\"" | cut -d : -f 2 | tr -d \" | tr -d " ")
+      _debug2 "Return Zone ID(s):" "${zoneidlist}"
+      _debug2 "Return Zone Name(s):" "${zonenamelist}"
+      zoneidnum=0
+      zoneidcount=$(echo "${zoneidlist}" | grep -c '^')
+      _debug "Retund Zone ID(s) Count:" "${zoneidcount}"
+      while [ "${zoneidnum}" -lt "${zoneidcount}" ]; do
+        zoneidnum=$(_math "$zoneidnum" + 1)
+        _zoneid=$(echo "${zoneidlist}" | sed -n "${zoneidnum}p")
+        zonename=$(echo "${zonenamelist}" | sed -n "${zoneidnum}p")
+        _debug "Check Zone Name" "${zonename}"
+        if [ "${zonename}" = "${h}." ]; then
+          _debug "Get Zone ID Success."
+          _debug "ZoneID:" "${_zoneid}"
+          printf "%s" "${_zoneid}"
+          return 0
+        fi
+      done
     fi
-
     i=$(_math "$i" + 1)
   done
   return 1
@@ -149,7 +165,7 @@ _get_recordset_id() {
   export _H1="X-Auth-Token: ${_token}"
 
   response=$(_get "${dns_api}/v2/zones/${_zoneid}/recordsets?name=${_domain}")
-  if _contains "${response}" "id"; then
+  if _contains "${response}" '"id"'; then
     _id="$(echo "${response}" | _egrep_o "\"id\": *\"[^\"]*\"" | cut -d : -f 2 | tr -d \" | tr -d " ")"
     printf "%s" "${_id}"
     return 0
@@ -197,7 +213,7 @@ _add_record() {
   fi
 
   _record_id="$(_get_recordset_id "${_token}" "${_domain}" "${zoneid}")"
-  _debug "Record Set ID is: ${_record_id}"
+  _debug "Record Set ID is:" "${_record_id}"
 
   # Remove all records
   while [ "${_record_id}" != "0" ]; do
@@ -239,7 +255,7 @@ _rm_record() {
 _get_token() {
   _username=$1
   _password=$2
-  _project=$3
+  _domain_name=$3
 
   _debug "Getting Token"
   body="{
@@ -253,14 +269,14 @@ _get_token() {
             \"name\": \"${_username}\",
             \"password\": \"${_password}\",
             \"domain\": {
-              \"name\": \"${_username}\"
+              \"name\": \"${_domain_name}\"
             }
           }
         }
       },
       \"scope\": {
         \"project\": {
-          \"id\": \"${_project}\"
+          \"name\": \"ap-southeast-1\"
         }
       }
     }
@@ -269,7 +285,7 @@ _get_token() {
   _post "${body}" "${iam_api}/v3/auth/tokens" >/dev/null
   _code=$(grep "^HTTP" "$HTTP_HEADER" | _tail_n 1 | cut -d " " -f 2 | tr -d "\\r\\n")
   _token=$(grep "^X-Subject-Token" "$HTTP_HEADER" | cut -d " " -f 2-)
-  _debug2 "${_code}"
+  _secure_debug "${_code}"
   printf "%s" "${_token}"
   return 0
 }

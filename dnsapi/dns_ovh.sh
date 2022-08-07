@@ -118,6 +118,7 @@ _initAuth() {
     #return and wait for retry.
     return 1
   fi
+  _saveaccountconf OVH_CK "$OVH_CK"
 
   _info "Checking authentication"
 
@@ -198,6 +199,8 @@ dns_ovh_rm() {
       if ! _ovh_rest DELETE "domain/zone/$_domain/record/$rid"; then
         return 1
       fi
+      _ovh_rest POST "domain/zone/$_domain/refresh"
+      _debug "Refresh:$response"
       return 0
     fi
   done
@@ -233,7 +236,6 @@ _ovh_authentication() {
   _secure_debug consumerKey "$consumerKey"
 
   OVH_CK="$consumerKey"
-  _saveaccountconf OVH_CK "$OVH_CK"
 
   _info "Please open this link to do authentication: $(__green "$validationUrl")"
 

@@ -25,12 +25,12 @@ jobs:
            CA: ""
            CA_EMAIL: ""
            TEST_PREFERRED_CHAIN: (STAGING) Pretend Pear X1
-         - TEST_ACME_Server: "ZeroSSL.com"
-           CA_ECDSA: "ZeroSSL ECC Domain Secure Site CA"
-           CA: "ZeroSSL RSA Domain Secure Site CA"
-           CA_EMAIL: "githubtest@acme.sh"
-           TEST_PREFERRED_CHAIN: ""
-    runs-on: macos-10.15
+         #- TEST_ACME_Server: "ZeroSSL.com"
+         #  CA_ECDSA: "ZeroSSL ECC Domain Secure Site CA"
+         #  CA: "ZeroSSL RSA Domain Secure Site CA"
+         #  CA_EMAIL: "githubtest@acme.sh"
+         #  TEST_PREFERRED_CHAIN: ""
+    runs-on: macos-12
     env:
       TEST_LOCAL: 1
       TEST_ACME_Server: ${{ matrix.TEST_ACME_Server }}
@@ -49,13 +49,14 @@ jobs:
       run: echo "TestingDomain=${{steps.tunnel.outputs.server}}" >> $GITHUB_ENV
     - name: Clone acmetest
       run: cd .. && git clone https://github.com/acmesh-official/acmetest.git  && cp -r acme.sh acmetest/
-    - uses: vmactions/freebsd-vm@v0.1.5
+    - uses: vmactions/freebsd-vm@v0
       with:
         envs: 'TEST_LOCAL TestingDomain TEST_ACME_Server CA_ECDSA CA CA_EMAIL TEST_PREFERRED_CHAIN'
         nat: |
           "8080": "80"
         prepare: pkg install -y socat curl
         usesh: true
+        copyback: false
         run: |
           cd ../acmetest \
           && ./letest.sh
